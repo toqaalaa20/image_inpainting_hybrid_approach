@@ -250,11 +250,20 @@ if __name__ == '__main__':
                 pass
 
     print('Summary:')
-    for m in methods:
-        ps = psnr_acc.get(m, [])
-        ls = lpips_acc.get(m, [])
-        ps_mean = sum(ps)/len(ps) if ps else None
-        ls_mean = sum(ls)/len(ls) if ls else None
-        print(f"{m}: PSNR mean = {ps_mean if ps_mean is None else f'{ps_mean:.4f}'} | LPIPS mean = {ls_mean if ls_mean is None else f'{ls_mean:.6f}'}")
+    with open("results/metrics_output.txt", "w") as f:
+        for m in methods:
+            ps = psnr_acc.get(m, [])
+            ls = lpips_acc.get(m, [])
+            ps_mean = sum(ps)/len(ps) if ps else None
+            ls_mean = sum(ls)/len(ls) if ls else None
 
-    print('\nDone.')
+            # Prepare the line
+            line = f"{m}: PSNR mean = {ps_mean if ps_mean is None else f'{ps_mean:.4f}'} | LPIPS mean = {ls_mean if ls_mean is None else f'{ls_mean:.6f}'}\n"
+            
+            # Write to file
+            f.write(line)
+            
+            # Also print if you want
+            print(line, end='')
+
+    print('\nDone. Data saved to metrics_output.txt')

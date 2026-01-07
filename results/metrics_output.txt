@@ -1,0 +1,11 @@
+telea: PSNR mean = 21.0759 | LPIPS mean = 0.270745
+ns: PSNR mean = 21.0687 | LPIPS mean = 0.268178
+lama: PSNR mean = 22.6615 | LPIPS mean = 0.150527
+lama_hybrid_blend_cut01: PSNR mean = 33.7352 | LPIPS mean = 0.011148
+lama_hybrid_blend_cut02: PSNR mean = 30.1223 | LPIPS mean = 0.021977
+lama_hybrid_blend_cut05: PSNR mean = 26.7949 | LPIPS mean = 0.050361
+lama_hybrid_blend_cut10: PSNR mean = 25.0953 | LPIPS mean = 0.089746
+lama_hybrid_lowpass_cut01: PSNR mean = 16.1152 | LPIPS mean = 0.862453
+lama_hybrid_lowpass_cut02: PSNR mean = 17.4606 | LPIPS mean = 0.816526
+lama_hybrid_lowpass_cut05: PSNR mean = 19.1980 | LPIPS mean = 0.675950
+lama_hybrid_lowpass_cut10: PSNR mean = 20.4951 | LPIPS mean = 0.488966

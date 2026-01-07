@@ -2,23 +2,16 @@ import torch
 import cv2
 import numpy as np
 from pathlib import Path
-import os
 import argparse
 import math
 
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-# Paths
-WEIGHTS = "/workspace/weights/big-lama.pt"
-RAW_DIR = Path("/workspace/data/raw")
-MASK_DIR = Path("/workspace/data/masks")
-OUT_DIR = Path("/workspace/results/lama")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def pad_to_multiple(img, factor):
+def pad_to_multiple(img: np.ndarray, factor: int):
+    """
+    Pad an image or single-channel mask so H and W are multiples of `factor`.
+    Works with float or uint8 arrays and preserves channels.
+    Returns (padded, (top, bottom, left, right)).
+    """
     h, w = img.shape[:2]
     new_h = int(math.ceil(h / factor) * factor)
     new_w = int(math.ceil(w / factor) * factor)
@@ -28,65 +21,63 @@ def pad_to_multiple(img, factor):
     bottom = pad_h - top
     left = pad_w // 2
     right = pad_w - left
-    if len(img.shape) == 3:
+
+    if img.ndim == 3:
         padded = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_REFLECT)
     else:
+        # single channel (mask)
         padded = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=0)
     return padded, (top, bottom, left, right)
 
 
-def unpad(img, pads):
+def unpad(img: np.ndarray, pads):
     top, bottom, left, right = pads
     h, w = img.shape[:2]
-    return img[top:h - bottom if bottom != 0 else h, left:w - right if right != 0 else w]
+    bottom_idx = h - bottom if bottom != 0 else h
+    right_idx = w - right if right != 0 else w
+    return img[top:bottom_idx, left:right_idx]
 
 
-def load_model(weights_path, device, scripted=False):
+def load_model(weights_path: str, device: torch.device, scripted: bool = False):
     weights_path = Path(weights_path)
     if not weights_path.exists():
         raise FileNotFoundError(f"Weights not found: {weights_path}")
 
     if scripted:
-        print("🧠 Loading scripted TorchScript model...")
+        # TorchScript
         model = torch.jit.load(str(weights_path), map_location=device)
         model.eval()
-        return model
+        return model.to(device)
 
-    # Try best-effort to load a saved module or state dict. If not a full module, raise informative error.
-    print("🧠 Attempting to load weights as a saved torch module (not scripted).")
+    # Best-effort load: either a saved nn.Module or a checkpoint
     obj = torch.load(str(weights_path), map_location=device)
     if isinstance(obj, torch.nn.Module):
-        model = obj
-        model.eval()
-        return model.to(device)
-    # Some checkpoints are dicts with a 'state_dict' - these require the original model class to load.
+        obj.eval()
+        return obj.to(device)
+
     if isinstance(obj, dict) and "state_dict" in obj:
-        raise RuntimeError("Checkpoint contains 'state_dict' but no model class. Provide a scripted model (use --scripted) or provide a loader that constructs the model.")
+        raise RuntimeError(
+            "Checkpoint contains 'state_dict' but no model class. Provide a scripted model (use --scripted)"
+        )
 
     raise RuntimeError("Unsupported weight file format. Provide a scripted TorchScript model with --scripted or a saved torch.nn.Module.")
 
 
-def preprocess_image(img_bgr, mask_gray):
-    # img_bgr: HxWx3 uint8 BGR
-    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-    img_f = img_rgb.astype(np.float32) / 255.0
-    # mask: single-channel uint8
-    if len(mask_gray.shape) == 3:
+def preprocess_image(img_bgr: np.ndarray, mask_gray: np.ndarray):
+    # Convert BGR->RGB and scale to float32 0..1
+    img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    if mask_gray is None:
+        raise ValueError("Mask is None")
+    if mask_gray.ndim == 3:
         mask_gray = cv2.cvtColor(mask_gray, cv2.COLOR_BGR2GRAY)
     _, mask_bin = cv2.threshold(mask_gray, 127, 255, cv2.THRESH_BINARY)
     mask_f = (mask_bin.astype(np.float32) / 255.0)
-    return img_f, mask_f
+    return img_rgb, mask_f
 
 
-def to_tensor(img_f):
-    # img_f: HxWxC (float32 0..1)
-    t = torch.from_numpy(img_f).permute(2, 0, 1).unsqueeze(0).float()
-    return t
-
-
-def save_result(out_arr, out_path):
-    # out_arr expected HxWx3 float32 or uint8 in RGB [0..1] or [0..255]
-    if out_arr.dtype == np.float32 or out_arr.dtype == np.float64:
+def save_result(out_arr: np.ndarray, out_path: Path):
+    # out_arr expected HxWx3 float32 in RGB (0..1) or uint8 RGB (0..255)
+    if out_arr.dtype in (np.float32, np.float64):
         out = np.clip(out_arr, 0.0, 1.0)
         out = (out * 255.0).round().astype(np.uint8)
     else:
@@ -96,7 +87,7 @@ def save_result(out_arr, out_path):
 
 
 def run_inference(weights, raw_dir, mask_dir, out_dir, device_str, scripted=False, factor=8):
-    device = torch.device(device_str if torch.cuda.is_available() and "cuda" in device_str else "cpu")
+    device = torch.device("cuda" if (device_str == "cuda" and torch.cuda.is_available()) else "cpu")
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -128,30 +119,31 @@ def run_inference(weights, raw_dir, mask_dir, out_dir, device_str, scripted=Fals
 
             img_f, mask_f = preprocess_image(img, mask)
 
-            # pad
-            img_pad, pads = pad_to_multiple((img_f * 255).astype(np.uint8), factor)
-            # img_pad currently uint8 in BGR if we used copyMakeBorder; convert back to float RGB
-            img_pad_rgb = cv2.cvtColor(img_pad, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-            # pad mask similarly
-            mask_pad, _ = pad_to_multiple((mask_f * 255).astype(np.uint8), factor)
-            _, mask_pad_bin = cv2.threshold(mask_pad, 127, 255, cv2.THRESH_BINARY)
+            # pad (works with float arrays)
+            img_pad, pads = pad_to_multiple(img_f, factor)
+            mask_pad, _ = pad_to_multiple(mask_f, factor)
+            # ensure mask is binary 0/1
+            _, mask_pad_bin = cv2.threshold((mask_pad * 255).astype(np.uint8), 127, 255, cv2.THRESH_BINARY)
+            mask_pad_f = (mask_pad_bin.astype(np.float32) / 255.0)
 
-            # to tensors
-            img_t = torch.from_numpy(img_pad_rgb).permute(2, 0, 1).unsqueeze(0).to(device).float()
-            mask_t = torch.from_numpy(mask_pad_bin.astype(np.float32) / 255.0).unsqueeze(0).unsqueeze(0).to(device)
+            # to tensors: [B, C, H, W] for image, [B, 1, H, W] for mask
+            img_t = torch.from_numpy(img_pad.transpose(2, 0, 1)).unsqueeze(0).to(device).float()
+            mask_t = torch.from_numpy(mask_pad_f).unsqueeze(0).unsqueeze(0).to(device).float()
 
             with torch.no_grad():
-                # Model call convention may vary; attempt common patterns
+                out = None
+                # Try common call signatures: model(img, mask) or model({'image': img, 'mask': mask})
                 try:
                     out = model(img_t, mask_t)
                 except TypeError:
-                    # some scripted models expect a dict or single tensor
                     try:
-                        out = model(img_t, mask_t)
+                        out = model({"image": img_t, "mask": mask_t})
                     except Exception as e:
-                        raise RuntimeError(f"Model inference failed: {e}")
+                        raise RuntimeError(f"Model inference failed (tried several call signatures): {e}")
+                except Exception as e:
+                    raise RuntimeError(f"Model inference failed: {e}")
 
-            # out may be tensor or tuple/list
+            # Normalize model output to HxWx3 float 0..1
             if isinstance(out, (list, tuple)):
                 out = out[0]
             if isinstance(out, torch.Tensor):
@@ -159,21 +151,18 @@ def run_inference(weights, raw_dir, mask_dir, out_dir, device_str, scripted=Fals
             else:
                 raise RuntimeError("Model output type not recognized (expected torch.Tensor).")
 
-            # ensure in 0..1
-            if res.dtype != np.float32 and res.dtype != np.float64:
-                res = res.astype(np.float32)
             # if model outputs 0..255 scale
+            if res.dtype not in (np.float32, np.float64):
+                res = res.astype(np.float32)
             if res.max() > 2.0:
                 res = res / 255.0
             res = np.clip(res, 0.0, 1.0)
 
             # unpad
-            res_unpad = unpad((res * 255).round().astype(np.uint8), pads)
-            # convert back to RGB float 0..1 for save_result
-            res_unpad_rgb = cv2.cvtColor(res_unpad, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            res_unpad = unpad(res, pads)
 
             out_path = out_dir / f"{stem}_lama.png"
-            save_result(res_unpad_rgb, out_path)
+            save_result(res_unpad, out_path)
             print(f"✨ AI Result Saved: {out_path.name}")
 
         except Exception as e:

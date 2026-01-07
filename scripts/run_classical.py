@@ -1,41 +1,50 @@
+from pathlib import Path
 import cv2
 import numpy as np
-import random
-from pathlib import Path
 import time
 import csv
+from typing import Iterable, List, Optional, Tuple
 
-# Force absolute paths
-RAW_DIR = Path("/workspace/data/raw")
-MASK_DIR = Path("/workspace/data/masks")
-OUT_DIR = Path("/workspace/results/classical")
 
-for p in [MASK_DIR, OUT_DIR]: p.mkdir(parents=True, exist_ok=True)
+def find_image_paths(raw_dir: Path) -> List[Path]:
+    """Return sorted list of supported image files in raw_dir."""
+    exts = ("*.jpg", "*.png", "*.JPEG")
+    paths = []
+    for e in exts:
+        paths.extend(raw_dir.glob(e))
+    return sorted(paths)
 
-image_files = list(RAW_DIR.glob("*.jpg")) + list(RAW_DIR.glob("*.png")) + list(RAW_DIR.glob("*.JPEG"))
 
-def _ensure_gray_mask(mask, size):
-    # mask: ndarray, may be 3-channel or single
+def _ensure_gray_mask(mask: np.ndarray, size: Tuple[int, int]) -> Optional[np.ndarray]:
+    """Ensure mask is single-channel, binary, and matches `size` (H,W)."""
     if mask is None:
         return None
     if mask.shape[:2] != size:
         mask = cv2.resize(mask, (size[1], size[0]), interpolation=cv2.INTER_NEAREST)
-    if len(mask.shape) == 3:
+    if mask.ndim == 3:
         mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-    # binary
     _, mask = cv2.threshold(mask, 10, 255, cv2.THRESH_BINARY)
     return mask
 
-def run_classical(raw_dir="data/raw", mask_dir="data/masks", out_dir="results/classical",
-                  methods=("telea", "ns"), radius=3, limit=None, force=False, write_csv=False):
+
+def run_classical(
+    raw_dir: str = "data/raw",
+    mask_dir: str = "data/masks",
+    out_dir: str = "results/classical",
+    methods: Iterable[str] = ("telea", "ns"),
+    radius: float = 3.0,
+    limit: Optional[int] = None,
+    force: bool = False,
+    write_csv: bool = False,
+):
     raw_dir = Path(raw_dir)
     mask_dir = Path(mask_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    img_paths = sorted(raw_dir.glob("*.jpg"))
+    img_paths = find_image_paths(raw_dir)
     if limit is not None:
-        img_paths = img_paths[:int(limit)]
+        img_paths = img_paths[: int(limit)]
 
     results = []
 
@@ -104,17 +113,31 @@ def run_classical(raw_dir="data/raw", mask_dir="data/masks", out_dir="results/cl
 
 if __name__ == "__main__":
     import argparse
+
     p = argparse.ArgumentParser(description="Run classical inpainting methods (Telea, Navier–Stokes)")
     p.add_argument("--raw-dir", default="data/raw")
     p.add_argument("--mask-dir", default="data/masks")
     p.add_argument("--out-dir", default="results/classical")
-    p.add_argument("--methods", nargs="*", choices=["telea", "ns"], default=["telea", "ns"],
-                   help="Which methods to run")
+    p.add_argument(
+        "--methods",
+        nargs="*",
+        choices=["telea", "ns"],
+        default=["telea", "ns"],
+        help="Which methods to run",
+    )
     p.add_argument("--radius", type=float, default=3.0, help="inpainting radius")
     p.add_argument("--limit", type=int, default=None, help="Process only first N images")
     p.add_argument("--force", action="store_true", help="Overwrite existing outputs")
     p.add_argument("--write-csv", action="store_true", help="Write a CSV summary to out-dir")
     args = p.parse_args()
 
-    run_classical(args.raw_dir, args.mask_dir, args.out_dir, methods=args.methods,
-                  radius=args.radius, limit=args.limit, force=args.force, write_csv=args.write_csv)
+    run_classical(
+        args.raw_dir,
+        args.mask_dir,
+        args.out_dir,
+        methods=args.methods,
+        radius=args.radius,
+        limit=args.limit,
+        force=args.force,
+        write_csv=args.write_csv,
+    )

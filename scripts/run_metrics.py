@@ -1,38 +1,24 @@
-import cv2
-import numpy as np
-from pathlib import Path
 import csv
 import math
+from pathlib import Path
+from collections import defaultdict
+
+import cv2
+import numpy as np
 import torch
 
-
-def psnr_uint8(img1, img2):
-    """Compute PSNR between two uint8 RGB images (HxWx3)."""
-    if img1.shape != img2.shape:
-        raise ValueError("Images must have the same shape for PSNR")
-    mse = np.mean((img1.astype(np.float64) - img2.astype(np.float64)) ** 2)
-    if mse == 0:
-        return float('inf')
-    PIXEL_MAX = 255.0
-    return 20 * math.log10(PIXEL_MAX) - 10 * math.log10(mse)
-
-
-def load_img_rgb(path, target_size=None):
-    img = cv2.imread(str(path))
-    if img is None:
-        return None
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    if target_size is not None and (img.shape[0] != target_size[0] or img.shape[1] != target_size[1]):
-        img = cv2.resize(img, (target_size[1], target_size[0]), interpolation=cv2.INTER_LINEAR)
-    return img
-
-
-def prepare_tensor_for_lpips(img_rgb):
-    # img_rgb: HxWx3 uint8 0..255
-    img_f = img_rgb.astype(np.float32) / 255.0
-    t = torch.from_numpy(img_f).permute(2, 0, 1).unsqueeze(0)  # 1x3xHxW
-    t = t * 2.0 - 1.0  # scale to [-1,1]
-    return t
+# Reuse shared helpers to avoid duplication. When this script is executed directly
+# the interpreter's sys.path may not include the repository root, causing
+# `ModuleNotFoundError: No module named 'scripts'`. Attempt a normal import and
+# fall back to prepending the project root to sys.path.
+try:
+    from scripts.utils import load_img_rgb, prepare_tensor_for_lpips, psnr_uint8
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path as _Path
+    repo_root = _Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(repo_root))
+    from scripts.utils import load_img_rgb, prepare_tensor_for_lpips, psnr_uint8
 
 
 if __name__ == '__main__':
@@ -53,15 +39,14 @@ if __name__ == '__main__':
     classical_dir = Path(args.classical_dir)
     lama_dir = Path(args.lama_dir)
     # Auto-detect hybrid directory if not provided on the CLI.
-    # Common locations: results/lama_hybrid, results/lama-hybrid, results/lama_hybrid_outputs
+    candidates = [Path('results/lama_hybrid'), Path('results/lama-hybrid'), Path('results/lama_hybrid_outputs')]
+    hybrid_dir = None
     if args.hybrid_dir:
         hybrid_dir = Path(args.hybrid_dir)
         if not hybrid_dir.exists():
             print(f"Provided hybrid-dir does not exist: {hybrid_dir} — hybrid metrics will be skipped.")
             hybrid_dir = None
     else:
-        candidates = [Path('results/lama_hybrid'), Path('results/lama-hybrid'), Path('results/lama_hybrid_outputs')]
-        hybrid_dir = None
         for c in candidates:
             if c.exists():
                 hybrid_dir = c
@@ -123,13 +108,12 @@ if __name__ == '__main__':
                 pstr = str(hp)
                 if pstr in seen_paths:
                     continue
-                # derive method name by removing the "<stem>_" prefix from the stem
+                # derive method name by removing the "<stem>_" prefix
                 st = hp.stem
                 if st.startswith(stem + '_'):
                     method = st[len(stem) + 1:]
                 else:
                     method = st
-                # normalize method name
                 method = method.replace('.', '_')
                 candidates.append((method, hp))
                 seen_paths.add(pstr)
@@ -228,7 +212,6 @@ if __name__ == '__main__':
     print(f"Aggregated comparison written to {out_agg_csv}\n")
 
     # Print brief summary: per-method means for PSNR and LPIPS where available
-    from collections import defaultdict
     psnr_acc = defaultdict(list)
     lpips_acc = defaultdict(list)
     for img, md in data.items():
@@ -241,12 +224,12 @@ if __name__ == '__main__':
             try:
                 if p is not None and p != '':
                     psnr_acc[m].append(float(p))
-            except:
+            except Exception:
                 pass
             try:
                 if l is not None and l != '':
                     lpips_acc[m].append(float(l))
-            except:
+            except Exception:
                 pass
 
     print('Summary:')
@@ -259,11 +242,11 @@ if __name__ == '__main__':
 
             # Prepare the line
             line = f"{m}: PSNR mean = {ps_mean if ps_mean is None else f'{ps_mean:.4f}'} | LPIPS mean = {ls_mean if ls_mean is None else f'{ls_mean:.6f}'}\n"
-            
+
             # Write to file
             f.write(line)
-            
-            # Also print if you want
+
+            # Also print
             print(line, end='')
 
     print('\nDone. Data saved to metrics_output.txt')

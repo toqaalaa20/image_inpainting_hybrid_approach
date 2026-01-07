@@ -1,0 +1,6 @@
+/data
+/.cache__pycache__/
+.DS_Store
+*.pyc
+weights/
+.cache/
